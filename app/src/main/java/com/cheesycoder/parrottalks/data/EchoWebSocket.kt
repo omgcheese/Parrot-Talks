@@ -9,5 +9,5 @@ interface EchoWebSocket{
     val onMessage: Flow<NewMessage>
     suspend fun connect()
     suspend fun disconnect()
-    suspend fun sendMessage(message: NewMessage)
+    suspend fun sendMessage(message: String)
 }

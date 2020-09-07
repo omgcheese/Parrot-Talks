@@ -4,5 +4,6 @@ import com.cheesycoder.parrottalks.BuildConfig
 import org.koin.dsl.module
 
 val dataModule = module {
-    single<EchoWebSocket> { EchoWebSocketImpl(BuildConfig.WEB_SOCKET_URL) }
+    single<EchoWebSocket> { EchoWebSocketImpl(BuildConfig.WEB_SOCKET_URL, get()) }
+    single { OkHttpClientFactory() }
 }
