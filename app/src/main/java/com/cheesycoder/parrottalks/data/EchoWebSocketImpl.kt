@@ -8,8 +8,13 @@ import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.*
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import kotlin.coroutines.resume
 
 class EchoWebSocketImpl(
@@ -21,6 +26,7 @@ class EchoWebSocketImpl(
     private var _status = ConnectionStatus.IDLE
     private val messageRelay = BroadcastChannel<NewMessage>(1)
     private var _websocket: WebSocket? = null
+    private val connectionLock = Mutex()
 
     override val status: ConnectionStatus
         get() = _status
@@ -28,39 +34,44 @@ class EchoWebSocketImpl(
         get() = messageRelay.asFlow()
 
     override suspend fun connect() = withContext(coroutineDispatcher) {
-        _status = ConnectionStatus.IS_CONNECTING
-        val request = Request.Builder().url(websocketUrl).build()
-        val okHttpClient = factory.create()
-        _websocket = suspendCancellableCoroutine<WebSocket> {
-            okHttpClient.newWebSocket(request, object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    _status = ConnectionStatus.CONNECTED
-                    it.resume(webSocket)
-                }
+        connectionLock.withLock {
+            if (_status != ConnectionStatus.IDLE) return@withLock
+            _status = ConnectionStatus.IS_CONNECTING
+            val request = Request.Builder().url(websocketUrl).build()
+            val okHttpClient = factory.create()
+            _websocket = suspendCancellableCoroutine<WebSocket> {
+                okHttpClient.newWebSocket(request, object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        _status = ConnectionStatus.CONNECTED
+                        it.resume(webSocket)
+                    }
 
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    messageRelay.offer(NewMessage(id = 100, content = text))
-                }
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        messageRelay.offer(NewMessage(id = 100, content = text))
+                    }
 
-                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    _websocket?.close(1000, null)
-                }
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        _websocket?.close(1000, null)
+                    }
 
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    _status = ConnectionStatus.IDLE
-                    messageRelay.offer(NewMessage(id = 100, content = "Error"))
-                }
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        _status = ConnectionStatus.IDLE
+                        messageRelay.offer(NewMessage(id = 100, content = "Error"))
+                    }
 
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    _status = ConnectionStatus.IDLE
-                }
-            })
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        _status = ConnectionStatus.IDLE
+                    }
+                })
+            }
+            okHttpClient.dispatcher.executorService.shutdown()
         }
-        okHttpClient.dispatcher.executorService.shutdown()
     }
 
     override suspend fun disconnect(): Unit = withContext(coroutineDispatcher) {
-        _websocket?.close(1000, "Closing manually")
+        connectionLock.withLock {
+            _websocket?.close(1000, "Closing manually")
+        }
     }
 
     override suspend fun sendMessage(message: String): Unit = withContext(coroutineDispatcher) {
